@@ -1,0 +1,67 @@
+name: Generate Structurizr Diagrams
+
+on:
+  workflow_call:
+    inputs:
+      content-root:
+        description: Antora content root that contains antora.yml
+        required: false
+        type: string
+        default: docs
+
+permissions:
+  contents: read
+
+jobs:
+  diagrams:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v5
+
+      - name: Generate Structurizr SVG diagrams
+        shell: bash
+        env:
+          CONTENT_ROOT: ${{ inputs.content-root }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "${CONTENT_ROOT}/antora.yml" ]; then
+            echo "::error::Antora content root does not contain antora.yml: ${CONTENT_ROOT}"
+            exit 2
+          fi
+
+          if [ ! -d "${CONTENT_ROOT}/modules" ]; then
+            echo "No Antora modules found under ${CONTENT_ROOT}."
+            exit 0
+          fi
+
+          mapfile -t workspaces < <(find "${CONTENT_ROOT}/modules" -path '*/examples/diagrams/structurizr/workspace.json' -type f -print | sort)
+
+          if [ "${#workspaces[@]}" -eq 0 ]; then
+            echo "No Structurizr workspaces found."
+            exit 0
+          fi
+
+          for workspace in "${workspaces[@]}"; do
+            module_dir="${workspace%/examples/diagrams/structurizr/workspace.json}"
+            output_dir="${module_dir}/assets/images/diagrams"
+
+            mkdir -p "${output_dir}"
+
+            echo "Generating SVG diagrams from ${workspace}"
+            docker run --rm \
+              -v "${PWD}:/usr/local/structurizr" \
+              structurizr/structurizr:2026.05.22-playwright \
+              export \
+              -format svg \
+              -workspace "${workspace}" \
+              -output "${output_dir}"
+
+            if [ -n "$(git status --porcelain -- "${output_dir}")" ]; then
+              echo "::error::Generated SVG diagrams are not committed for ${output_dir}"
+              git status --short -- "${output_dir}"
+              git diff -- "${output_dir}"
+              exit 1
+            fi
+          done
